@@ -1,0 +1,6 @@
+@FaceMatchAPI_HostAddress = http://localhost:5214
+
+GET {{FaceMatchAPI_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

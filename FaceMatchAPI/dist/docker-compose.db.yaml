@@ -1,0 +1,35 @@
+services:
+  idap-mongo-db:
+    image: mongodb/mongodb-community-server:7.0.18-rc0-ubuntu2204
+    user: "1001:1001"
+    restart: unless-stopped
+    container_name: idap-mongo-db
+    ports:
+      - 27017:27017
+    volumes:
+      - ./data-cache/mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: seo_ai
+      MONGO_INITDB_ROOT_PASSWORD: qrqvud3
+    networks:
+      idap_group:
+
+  idap-mongo-express:
+    image: mongo-express:1.0.2-20-alpine3.19
+    restart: unless-stopped
+    container_name: idap-mongo-express
+    ports:
+      - 18081:8081
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: seo_ai
+      ME_CONFIG_MONGODB_ADMINPASSWORD: qrqvud3
+      ME_CONFIG_MONGODB_URL: mongodb://seo_ai:qrqvud3@idap-mongo-db:27017/
+    depends_on:
+      - idap-mongo-db
+    networks:
+      idap_group:
+
+networks:
+  idap_group:
+    name: idap-group-network
+    driver: bridge
