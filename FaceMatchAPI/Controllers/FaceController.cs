@@ -2,6 +2,7 @@
 using FaceMatchAPI.Services;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
+using System.Buffers.Text;
 
 namespace FaceMatchAPI.Controllers
 {
@@ -30,7 +31,8 @@ namespace FaceMatchAPI.Controllers
 
             await _mongo.FaceImages.InsertOneAsync(image);
 
-            var vector = _face.ExtractFeature(req.Base64);
+            //var vector = _face.ExtractFeature(req.Base64);
+            var vector = _face.ExtractFeatureWithFlip(req.Base64);
 
             var faceVector = new FaceVector
             {
@@ -48,7 +50,8 @@ namespace FaceMatchAPI.Controllers
         [HttpPost("search")]
         public async Task<IActionResult> Search([FromBody] SearchRequest req)
         {
-            var queryVector = _face.ExtractFeature(req.Base64);
+            //var queryVector = _face.ExtractFeature(req.Base64);
+            var queryVector = _face.ExtractFeatureWithFlip(req.Base64);
 
             var filter = Builders<FaceVector>.Filter.Empty;
 
@@ -75,10 +78,16 @@ namespace FaceMatchAPI.Controllers
 
         private float CosineSimilarity(float[] a, float[] b)
         {
-            float dot = 0;
+            float dot = 0, normA = 0, normB = 0;
+
             for (int i = 0; i < a.Length; i++)
+            {
                 dot += a[i] * b[i];
-            return dot;
+                normA += a[i] * a[i];
+                normB += b[i] * b[i];
+            }
+
+            return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
         }
     }
 }

@@ -4,6 +4,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 using OpenCvSharp.Dnn;
+using OpenCvSharp.Extensions;
 using Drawing = System.Drawing;
 
 namespace FaceMatchAPI.Services
@@ -37,8 +38,26 @@ namespace FaceMatchAPI.Services
             var bmp = Base64ToBitmap(base64);
             var face = _detector.Detect(bmp);
             var aligned = _aligner.Align(To24bpp(face));
+            aligned = new Drawing.Bitmap(aligned, new Drawing.Size(112, 112));
 
             return _model.GetFeature(aligned);
+        }
+
+        public float[] ExtractFeatureWithFlip(string base64)
+        {
+            var bmp = Base64ToBitmap(base64);
+
+            var face = _detector.Detect(bmp);
+            var aligned = _aligner.Align(To24bpp(face));
+            aligned = new Drawing.Bitmap(aligned, new Drawing.Size(112, 112));
+
+            var f1 = _model.GetFeature(aligned);
+
+            // flip
+            var flipped = FlipHorizontal(aligned);
+            var f2 = _model.GetFeature(flipped);
+
+            return _model.Average(f1, f2);
         }
 
         // ===== Utils =====
@@ -87,10 +106,11 @@ namespace FaceMatchAPI.Services
             var f1 = ExtractFeature(base64_1);
             var f2 = ExtractFeature(base64_2);
 
-            // 🔥 flip 추가
+            // flip 추가
             var bmp2 = Base64ToBitmap(base64_2);
             var face2 = _detector.Detect(bmp2);
             var aligned2 = _aligner.Align(To24bpp(face2));
+            aligned2 = new Drawing.Bitmap(aligned2, new Drawing.Size(112, 112));
 
             var flipped = FlipHorizontal(aligned2);
             var f2_flip = _model.GetFeature(flipped);
@@ -181,24 +201,20 @@ namespace FaceMatchAPI.Services
             int y2 = (int)(data[idx + 6] * h);
 
             // 좌표 보정
-            int padding = (int)((x2 - x1) * 0.35);
+            int padding = (int)((x2 - x1) * 0.2); // 기존 0.35 → 줄이기
 
-            // 좌표 보정 (🔥 중요)
+            // 좌표 보정
             x1 = Math.Max(0, x1 - padding);
             y1 = Math.Max(0, y1 - padding);
             x2 = Math.Min(w - 1, x2 + padding);
             y2 = Math.Min(h - 1, y2 + padding);
 
-            // 🔥 최소 크기 보장 (추가)
+            // 최소 크기 보장
             if (x2 <= x1 || y2 <= y1)
             {
                 Console.WriteLine("잘못된 얼굴 영역 → 중앙 crop");
                 return CenterCrop(bitmap);
             }
-            //x1 = Math.Max(0, x1);
-            //y1 = Math.Max(0, y1);
-            //x2 = Math.Min(w - 1, x2);
-            //y2 = Math.Min(h - 1, y2);
 
             var rect = new OpenCvSharp.Rect(x1, y1, x2 - x1, y2 - y1);
 
@@ -240,28 +256,12 @@ namespace FaceMatchAPI.Services
 
         public Drawing.Bitmap Align(Drawing.Bitmap bitmap)
         {
-            // 🔥 ToMatrix 제거 → 직접 변환
-            var img = new Array2D<RgbPixel>((int)bitmap.Height, (int)bitmap.Width);
-
-            for (int y = 0; y < bitmap.Height; y++)
-            {
-                for (int x = 0; x < bitmap.Width; x++)
-                {
-                    var c = bitmap.GetPixel(x, y);
-                    img[y][x] = new RgbPixel
-                    {
-                        Red = c.R,
-                        Green = c.G,
-                        Blue = c.B
-                    };
-                }
-            }
-
+            var img = bitmap.ToMatrix<RgbPixel>();
             var faces = _detector.Operator(img);
 
-            // 🔥 정렬 실패 fallback 개선
             if (faces.Length == 0)
             {
+                Console.WriteLine("Align 실패 → center crop");
                 return CenterCrop(bitmap);
             }
 
@@ -269,8 +269,49 @@ namespace FaceMatchAPI.Services
 
             var leftEye = GetPoint(shape, 36, 41);
             var rightEye = GetPoint(shape, 42, 47);
+            var nose = shape.GetPart(30);
+            var leftMouth = shape.GetPart(48);
+            var rightMouth = shape.GetPart(54);
 
-            return Rotate(bitmap, leftEye, rightEye);
+            var src = new[]
+            {
+                new Point2f(leftEye.X, leftEye.Y),
+                new Point2f(rightEye.X, rightEye.Y),
+                new Point2f(nose.X, nose.Y),
+                new Point2f(leftMouth.X, leftMouth.Y),
+                new Point2f(rightMouth.X, rightMouth.Y)
+            };
+
+            var dst = new[]
+            {
+                new Point2f(38.2946f, 51.6963f),
+                new Point2f(73.5318f, 51.5014f),
+                new Point2f(56.0252f, 71.7366f),
+                new Point2f(41.5493f, 92.3655f),
+                new Point2f(70.7299f, 92.2041f)
+            };
+
+            var srcMat = new Mat(src.Length, 2, MatType.CV_32F);
+            var dstMat = new Mat(dst.Length, 2, MatType.CV_32F);
+
+            for (int i = 0; i < src.Length; i++)
+            {
+                srcMat.Set(i, 0, src[i].X);
+                srcMat.Set(i, 1, src[i].Y);
+
+                dstMat.Set(i, 0, dst[i].X);
+                dstMat.Set(i, 1, dst[i].Y);
+            }
+
+            var mat = Cv2.EstimateAffinePartial2D(srcMat, dstMat);
+            //var mat = Cv2.EstimateAffinePartial2D(src, dst);
+
+            var srcMat2 = BitmapConverter.ToMat(bitmap);
+            var aligned = new Mat();
+
+            Cv2.WarpAffine(srcMat2, aligned, mat, new Size(112, 112));
+
+            return BitmapConverter.ToBitmap(aligned);
         }
 
         private Drawing.Bitmap CenterCrop(Drawing.Bitmap src)
@@ -346,10 +387,10 @@ namespace FaceMatchAPI.Services
 
                     int idx = y * 112 + x;
 
-                    // BGR + CHW 순서
-                    input[idx] = (p.B - 127.5f) / 128f;
+                    // RGB
+                    input[idx] = (p.R - 127.5f) / 128f;
                     input[channelSize + idx] = (p.G - 127.5f) / 128f;
-                    input[channelSize * 2 + idx] = (p.R - 127.5f) / 128f;
+                    input[channelSize * 2 + idx] = (p.B - 127.5f) / 128f;
                 }
             }
 
@@ -367,10 +408,21 @@ namespace FaceMatchAPI.Services
             return Normalize(output);
         }
 
+        public float[] Average(float[] a, float[] b)
+        {
+            var r = new float[a.Length];
+
+            for (int i = 0; i < a.Length; i++)
+                r[i] = (a[i] + b[i]) / 2f;
+
+            return Normalize(r);
+        }
+
         private float[] Normalize(float[] v)
         {
             float sum = 0;
             foreach (var x in v) sum += x * x;
+
             float norm = (float)Math.Sqrt(sum);
             return v.Select(x => x / norm).ToArray();
         }
