@@ -60,6 +60,46 @@ namespace FaceMatchAPI.Services
             g.DrawImage(src, 0, 0);
             return bmp;
         }
+
+        private static Drawing.Bitmap FlipHorizontal(Drawing.Bitmap src)
+        {
+            var bmp = new Drawing.Bitmap(src);
+            bmp.RotateFlip(Drawing.RotateFlipType.RotateNoneFlipX);
+            return bmp;
+        }
+
+        private static float CosineSimilarity(float[] a, float[] b)
+        {
+            float dot = 0, normA = 0, normB = 0;
+
+            for (int i = 0; i < a.Length; i++)
+            {
+                dot += a[i] * b[i];
+                normA += a[i] * a[i];
+                normB += b[i] * b[i];
+            }
+
+            return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
+        }
+
+        public float Compare(string base64_1, string base64_2)
+        {
+            var f1 = ExtractFeature(base64_1);
+            var f2 = ExtractFeature(base64_2);
+
+            // 🔥 flip 추가
+            var bmp2 = Base64ToBitmap(base64_2);
+            var face2 = _detector.Detect(bmp2);
+            var aligned2 = _aligner.Align(To24bpp(face2));
+
+            var flipped = FlipHorizontal(aligned2);
+            var f2_flip = _model.GetFeature(flipped);
+
+            float sim1 = CosineSimilarity(f1, f2);
+            float sim2 = CosineSimilarity(f1, f2_flip);
+
+            return Math.Max(sim1, sim2);
+        }
     }
 
     // ================= 얼굴 검출 =================
@@ -141,10 +181,24 @@ namespace FaceMatchAPI.Services
             int y2 = (int)(data[idx + 6] * h);
 
             // 좌표 보정
-            x1 = Math.Max(0, x1);
-            y1 = Math.Max(0, y1);
-            x2 = Math.Min(w - 1, x2);
-            y2 = Math.Min(h - 1, y2);
+            int padding = (int)((x2 - x1) * 0.35);
+
+            // 좌표 보정 (🔥 중요)
+            x1 = Math.Max(0, x1 - padding);
+            y1 = Math.Max(0, y1 - padding);
+            x2 = Math.Min(w - 1, x2 + padding);
+            y2 = Math.Min(h - 1, y2 + padding);
+
+            // 🔥 최소 크기 보장 (추가)
+            if (x2 <= x1 || y2 <= y1)
+            {
+                Console.WriteLine("잘못된 얼굴 영역 → 중앙 crop");
+                return CenterCrop(bitmap);
+            }
+            //x1 = Math.Max(0, x1);
+            //y1 = Math.Max(0, y1);
+            //x2 = Math.Min(w - 1, x2);
+            //y2 = Math.Min(h - 1, y2);
 
             var rect = new OpenCvSharp.Rect(x1, y1, x2 - x1, y2 - y1);
 
@@ -186,11 +240,30 @@ namespace FaceMatchAPI.Services
 
         public Drawing.Bitmap Align(Drawing.Bitmap bitmap)
         {
-            var img = bitmap.ToMatrix<RgbPixel>();            
+            // 🔥 ToMatrix 제거 → 직접 변환
+            var img = new Array2D<RgbPixel>((int)bitmap.Height, (int)bitmap.Width);
+
+            for (int y = 0; y < bitmap.Height; y++)
+            {
+                for (int x = 0; x < bitmap.Width; x++)
+                {
+                    var c = bitmap.GetPixel(x, y);
+                    img[y][x] = new RgbPixel
+                    {
+                        Red = c.R,
+                        Green = c.G,
+                        Blue = c.B
+                    };
+                }
+            }
+
             var faces = _detector.Operator(img);
 
+            // 🔥 정렬 실패 fallback 개선
             if (faces.Length == 0)
-                return bitmap;
+            {
+                return CenterCrop(bitmap);
+            }
 
             var shape = _predictor.Detect(img, faces[0]);
 
@@ -198,6 +271,23 @@ namespace FaceMatchAPI.Services
             var rightEye = GetPoint(shape, 42, 47);
 
             return Rotate(bitmap, leftEye, rightEye);
+        }
+
+        private Drawing.Bitmap CenterCrop(Drawing.Bitmap src)
+        {
+            int size = Math.Min(src.Width, src.Height);
+
+            var rect = new Drawing.Rectangle(
+                (src.Width - size) / 2,
+                (src.Height - size) / 2,
+                size, size);
+
+            var result = new Drawing.Bitmap(size, size);
+
+            using var g = Drawing.Graphics.FromImage(result);
+            g.DrawImage(src, new Drawing.Rectangle(0, 0, size, size), rect, Drawing.GraphicsUnit.Pixel);
+
+            return result;
         }
 
         private Drawing.Point GetPoint(FullObjectDetection shape, int s, int e)
