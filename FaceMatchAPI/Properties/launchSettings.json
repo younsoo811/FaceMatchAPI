@@ -5,7 +5,8 @@
       "launchBrowser": true,
       "launchUrl": "swagger",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "MONGODB_CONNECTION_STR": "mongodb://seo_ai:qrqvud3@192.168.0.181:27017"
       },
       "dotnetRunMessages": true,
       "applicationUrl": "http://localhost:5214"
