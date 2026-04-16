@@ -5,9 +5,10 @@
       dockerfile: Dockerfile
     container_name: face-api
     ports:
-      - 8080:8080
+      - 18885:18885
     environment:
       - MONGODB_CONNECTION_STR=mongodb://seo_ai:qrqvud3@idap-mongo-db:27017
+      - ASPNETCORE_URLS=http://0.0.0.0:18885
     networks:
       - idap_group
 
