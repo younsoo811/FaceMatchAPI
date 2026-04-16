@@ -12,7 +12,8 @@ namespace FaceMatchAPI.Services
 
         public MongoService()
         {
-            var client = new MongoClient("mongodb://seo_ai:qrqvud3@127.0.0.1:27017");
+            var conn = Environment.GetEnvironmentVariable("MONGODB_CONNECTION_STR");
+            var client = new MongoClient(conn);
 
             Database = client.GetDatabase("face_db");
 

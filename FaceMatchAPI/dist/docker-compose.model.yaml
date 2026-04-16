@@ -1,0 +1,17 @@
+﻿services:
+  face-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: face-api
+    ports:
+      - 8080:8080
+    environment:
+      - MONGODB_CONNECTION_STR=mongodb://seo_ai:qrqvud3@idap-mongo-db:27017
+    networks:
+      - idap_group
+
+networks:
+  idap_group:
+    name: idap-group-network
+    driver: bridge

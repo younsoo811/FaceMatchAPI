@@ -4,7 +4,7 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 using OpenCvSharp.Dnn;
-using OpenCvSharp.Extensions;
+using System.Runtime.InteropServices;
 using Drawing = System.Drawing;
 
 namespace FaceMatchAPI.Services
@@ -33,28 +33,19 @@ namespace FaceMatchAPI.Services
             );
         }
 
-        public float[] ExtractFeature(string base64)
-        {
-            var bmp = Base64ToBitmap(base64);
-            var face = _detector.Detect(bmp);
-            var aligned = _aligner.Align(To24bpp(face));
-            aligned = new Drawing.Bitmap(aligned, new Drawing.Size(112, 112));
-
-            return _model.GetFeature(aligned);
-        }
-
         public float[] ExtractFeatureWithFlip(string base64)
         {
-            var bmp = Base64ToBitmap(base64);
+            var mat = Base64ToMat(base64);
 
-            var face = _detector.Detect(bmp);
-            var aligned = _aligner.Align(To24bpp(face));
-            aligned = new Drawing.Bitmap(aligned, new Drawing.Size(112, 112));
+            var face = _detector.Detect(mat);
+            var aligned = _aligner.Align(face);
 
             var f1 = _model.GetFeature(aligned);
 
-            // flip
-            var flipped = FlipHorizontal(aligned);
+            // flip (OpenCV)
+            var flipped = new Mat();
+            Cv2.Flip(aligned, flipped, FlipMode.Y);
+
             var f2 = _model.GetFeature(flipped);
 
             return _model.Average(f1, f2);
@@ -62,63 +53,12 @@ namespace FaceMatchAPI.Services
 
         // ===== Utils =====
 
-        private static System.Drawing.Bitmap Base64ToBitmap(string base64)
+        private Mat Base64ToMat(string base64)
         {
             if (base64.Contains(",")) base64 = base64.Split(',')[1];
             var bytes = Convert.FromBase64String(base64);
-            using var ms = new MemoryStream(bytes);
-            return new System.Drawing.Bitmap(ms);
-        }
 
-        private static System.Drawing.Bitmap To24bpp(System.Drawing.Bitmap src)
-        {
-            var bmp = new System.Drawing.Bitmap(src.Width, src.Height,
-                System.Drawing.Imaging.PixelFormat.Format24bppRgb);
-
-            using var g = System.Drawing.Graphics.FromImage(bmp);
-            g.DrawImage(src, 0, 0);
-            return bmp;
-        }
-
-        private static Drawing.Bitmap FlipHorizontal(Drawing.Bitmap src)
-        {
-            var bmp = new Drawing.Bitmap(src);
-            bmp.RotateFlip(Drawing.RotateFlipType.RotateNoneFlipX);
-            return bmp;
-        }
-
-        private static float CosineSimilarity(float[] a, float[] b)
-        {
-            float dot = 0, normA = 0, normB = 0;
-
-            for (int i = 0; i < a.Length; i++)
-            {
-                dot += a[i] * b[i];
-                normA += a[i] * a[i];
-                normB += b[i] * b[i];
-            }
-
-            return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
-        }
-
-        public float Compare(string base64_1, string base64_2)
-        {
-            var f1 = ExtractFeature(base64_1);
-            var f2 = ExtractFeature(base64_2);
-
-            // flip 추가
-            var bmp2 = Base64ToBitmap(base64_2);
-            var face2 = _detector.Detect(bmp2);
-            var aligned2 = _aligner.Align(To24bpp(face2));
-            aligned2 = new Drawing.Bitmap(aligned2, new Drawing.Size(112, 112));
-
-            var flipped = FlipHorizontal(aligned2);
-            var f2_flip = _model.GetFeature(flipped);
-
-            float sim1 = CosineSimilarity(f1, f2);
-            float sim2 = CosineSimilarity(f1, f2_flip);
-
-            return Math.Max(sim1, sim2);
+            return Cv2.ImDecode(bytes, ImreadModes.Color);
         }
     }
 
@@ -141,19 +81,19 @@ namespace FaceMatchAPI.Services
                 throw new Exception("DNN 모델 로딩 실패");
         }
 
-        public Drawing.Bitmap Detect(Drawing.Bitmap bitmap)
+        public Mat Detect(Mat mat)
         {
-            // todo: windows 에서만 동작함
-            var mat = OpenCvSharp.Extensions.BitmapConverter.ToMat(bitmap);
+            if (mat.Empty())
+                throw new Exception("이미지 로딩 실패");
 
-            // 4채널(png) → 3채널 변환
+            // 4채널 → 3채널
             if (mat.Channels() == 4)
             {
                 Cv2.CvtColor(mat, mat, ColorConversionCodes.BGRA2BGR);
             }
 
             var blob = CvDnn.BlobFromImage(mat, 1.0,
-                new OpenCvSharp.Size(300, 300),
+                new Size(300, 300),
                 new Scalar(104, 177, 123));
 
             _net.SetInput(blob);
@@ -162,14 +102,8 @@ namespace FaceMatchAPI.Services
             int w = mat.Width;
             int h = mat.Height;
 
-            // 데이터 추출
             var data = new float[output.Total()];
-            System.Runtime.InteropServices.Marshal.Copy(
-                output.Data,
-                data,
-                0,
-                data.Length
-            );
+            Marshal.Copy(output.Data, data, 0, data.Length);
 
             int count = data.Length / 7;
 
@@ -179,7 +113,6 @@ namespace FaceMatchAPI.Services
             for (int i = 0; i < count; i++)
             {
                 float conf = data[i * 7 + 2];
-
                 if (conf > maxConf)
                 {
                     maxConf = conf;
@@ -190,7 +123,7 @@ namespace FaceMatchAPI.Services
             if (best == -1 || maxConf < 0.5)
             {
                 Console.WriteLine("얼굴 검출 실패 → 중앙 crop");
-                return CenterCrop(bitmap);
+                return CenterCrop(mat);
             }
 
             int idx = best * 7;
@@ -200,44 +133,29 @@ namespace FaceMatchAPI.Services
             int x2 = (int)(data[idx + 5] * w);
             int y2 = (int)(data[idx + 6] * h);
 
-            // 좌표 보정
-            int padding = (int)((x2 - x1) * 0.2); // 기존 0.35 → 줄이기
+            int padding = (int)((x2 - x1) * 0.2);
 
-            // 좌표 보정
             x1 = Math.Max(0, x1 - padding);
             y1 = Math.Max(0, y1 - padding);
             x2 = Math.Min(w - 1, x2 + padding);
             y2 = Math.Min(h - 1, y2 + padding);
 
-            // 최소 크기 보장
             if (x2 <= x1 || y2 <= y1)
-            {
-                Console.WriteLine("잘못된 얼굴 영역 → 중앙 crop");
-                return CenterCrop(bitmap);
-            }
+                return CenterCrop(mat);
 
-            var rect = new OpenCvSharp.Rect(x1, y1, x2 - x1, y2 - y1);
+            var rect = new Rect(x1, y1, x2 - x1, y2 - y1);
 
-            var face = new Mat(mat, rect);
-
-            return OpenCvSharp.Extensions.BitmapConverter.ToBitmap(face);
+            return new Mat(mat, rect);
         }
 
-        private Drawing.Bitmap CenterCrop(Drawing.Bitmap src)
+        private Mat CenterCrop(Mat src)
         {
             int size = Math.Min(src.Width, src.Height);
 
-            var rect = new Drawing.Rectangle(
-                (src.Width - size) / 2,
-                (src.Height - size) / 2,
-                size, size);
+            int x = (src.Width - size) / 2;
+            int y = (src.Height - size) / 2;
 
-            var result = new Drawing.Bitmap(size, size);
-
-            using var g = Drawing.Graphics.FromImage(result);
-            g.DrawImage(src, new Drawing.Rectangle(0, 0, size, size), rect, Drawing.GraphicsUnit.Pixel);
-
-            return result;
+            return new Mat(src, new Rect(x, y, size, size));
         }
     }
 
@@ -254,16 +172,14 @@ namespace FaceMatchAPI.Services
             _predictor = ShapePredictor.Deserialize(modelPath);
         }
 
-        public Drawing.Bitmap Align(Drawing.Bitmap bitmap)
+        public Mat Align(Mat mat)
         {
-            var img = bitmap.ToMatrix<RgbPixel>();
+            var img = MatToDlib(mat);
+
             var faces = _detector.Operator(img);
 
             if (faces.Length == 0)
-            {
-                Console.WriteLine("Align 실패 → center crop");
-                return CenterCrop(bitmap);
-            }
+                return mat;
 
             var shape = _predictor.Detect(img, faces[0]);
 
@@ -303,32 +219,35 @@ namespace FaceMatchAPI.Services
                 dstMat.Set(i, 1, dst[i].Y);
             }
 
-            var mat = Cv2.EstimateAffinePartial2D(srcMat, dstMat);
-            //var mat = Cv2.EstimateAffinePartial2D(src, dst);
+            var matTransform = Cv2.EstimateAffinePartial2D(srcMat, dstMat);
+            //var matTransform = Cv2.EstimateAffinePartial2D(src, dst);
 
-            var srcMat2 = BitmapConverter.ToMat(bitmap);
             var aligned = new Mat();
+            Cv2.WarpAffine(mat, aligned, matTransform, new Size(112, 112));
 
-            Cv2.WarpAffine(srcMat2, aligned, mat, new Size(112, 112));
-
-            return BitmapConverter.ToBitmap(aligned);
+            return aligned;
         }
 
-        private Drawing.Bitmap CenterCrop(Drawing.Bitmap src)
+        private Array2D<RgbPixel> MatToDlib(Mat mat)
         {
-            int size = Math.Min(src.Width, src.Height);
+            var img = new Array2D<RgbPixel>((int)mat.Height, (int)mat.Width);
 
-            var rect = new Drawing.Rectangle(
-                (src.Width - size) / 2,
-                (src.Height - size) / 2,
-                size, size);
+            for (int y = 0; y < mat.Height; y++)
+            {
+                for (int x = 0; x < mat.Width; x++)
+                {
+                    var p = mat.At<Vec3b>(y, x);
 
-            var result = new Drawing.Bitmap(size, size);
+                    img[y][x] = new RgbPixel
+                    {
+                        Red = p.Item2,
+                        Green = p.Item1,
+                        Blue = p.Item0
+                    };
+                }
+            }
 
-            using var g = Drawing.Graphics.FromImage(result);
-            g.DrawImage(src, new Drawing.Rectangle(0, 0, size, size), rect, Drawing.GraphicsUnit.Pixel);
-
-            return result;
+            return img;
         }
 
         private Drawing.Point GetPoint(FullObjectDetection shape, int s, int e)
@@ -340,23 +259,6 @@ namespace FaceMatchAPI.Services
                 y += shape.GetPart((uint)i).Y;
             }
             return new Drawing.Point(x / (e - s + 1), y / (e - s + 1));
-        }
-
-        private Drawing.Bitmap Rotate(Drawing.Bitmap src, Drawing.Point l, Drawing.Point r)
-        {
-            double dy = r.Y - l.Y;
-            double dx = r.X - l.X;
-            double angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
-
-            var result = new Drawing.Bitmap(src.Width, src.Height);
-
-            using var g = Drawing.Graphics.FromImage(result);
-            g.TranslateTransform(src.Width / 2, src.Height / 2);
-            g.RotateTransform((float)-angle);
-            g.TranslateTransform(-src.Width / 2, -src.Height / 2);
-            g.DrawImage(src, new Drawing.Point(0, 0));
-
-            return result;
         }
     }
 
@@ -371,41 +273,37 @@ namespace FaceMatchAPI.Services
             _session = new InferenceSession(path);
         }
 
-        public float[] GetFeature(Drawing.Bitmap bmp)
+        public float[] GetFeature(Mat mat)
         {
-            var resized = new Drawing.Bitmap(bmp, new Drawing.Size(112, 112));
+            var resized = new Mat();
+            Cv2.Resize(mat, resized, new Size(112, 112));
 
             float[] input = new float[1 * 3 * 112 * 112];
-
             int channelSize = 112 * 112;
 
             for (int y = 0; y < 112; y++)
             {
                 for (int x = 0; x < 112; x++)
                 {
-                    var p = resized.GetPixel(x, y);
+                    var pixel = resized.At<Vec3b>(y, x);
 
                     int idx = y * 112 + x;
 
                     // RGB
-                    input[idx] = (p.R - 127.5f) / 128f;
-                    input[channelSize + idx] = (p.G - 127.5f) / 128f;
-                    input[channelSize * 2 + idx] = (p.B - 127.5f) / 128f;
+                    input[idx] = (pixel.Item2 - 127.5f) / 128f;     // R
+                    input[channelSize + idx] = (pixel.Item1 - 127.5f) / 128f; // G
+                    input[channelSize * 2 + idx] = (pixel.Item0 - 127.5f) / 128f; // B
                 }
             }
 
             var tensor = new DenseTensor<float>(input, new[] { 1, 3, 112, 112 });
 
-            var inputName = _session.InputMetadata.Keys.First();
-
             var result = _session.Run(new[]
             {
-        NamedOnnxValue.CreateFromTensor(inputName, tensor)
-    });
+                NamedOnnxValue.CreateFromTensor(_session.InputMetadata.Keys.First(), tensor)
+            });
 
-            var output = result.First().AsEnumerable<float>().ToArray();
-
-            return Normalize(output);
+            return Normalize(result.First().AsEnumerable<float>().ToArray());
         }
 
         public float[] Average(float[] a, float[] b)
