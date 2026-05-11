@@ -8,6 +8,7 @@ namespace FaceMatchAPI.Services
         public IMongoDatabase Database { get; }
 
         public IMongoCollection<FaceVector> FaceVectors { get; }
+        public IMongoCollection<FaceVector> TargetVectors { get; }
         public IMongoCollection<FaceImage> FaceImages { get; }
 
         public MongoService()
@@ -18,6 +19,7 @@ namespace FaceMatchAPI.Services
             Database = client.GetDatabase("face_db");
 
             FaceVectors = Database.GetCollection<FaceVector>("face_vectors");
+            TargetVectors = Database.GetCollection<FaceVector>("target_vectors");
             FaceImages = Database.GetCollection<FaceImage>("face_images");
         }
     }
