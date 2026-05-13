@@ -67,6 +67,7 @@
     {
         public string Id { get; set; } = string.Empty;
         public string ImageId { get; set; } = string.Empty;
+        public string SubId { get; set; } = string.Empty;
         public float[] Vector { get; set; } = [];
         public DateTime CreatedAt { get; set; }
     }
@@ -75,5 +76,6 @@
     {
         public ImageType ImageType { get; set; } = ImageType.Normal;
         public List<string> Ids { get; set; } = []; // VectorId 리스트
+        public List<string> SubIds { get; set; } = []; // SubId 리스트 (VectorId 대신 SubId로 삭제할 때 사용)
     }
 }

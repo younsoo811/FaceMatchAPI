@@ -320,6 +320,7 @@ namespace FaceMatchAPI.Controllers
                     {
                         Id = x.Id.ToString(),
                         ImageId = x.ImageId,
+                        SubId = x.SubId,
                         Vector = x.Vector,
                         CreatedAt = x.CreatedAt
                     })
@@ -338,32 +339,58 @@ namespace FaceMatchAPI.Controllers
         {
             try
             {
-                if (req.Ids == null || req.Ids.Count == 0)
-                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", "삭제할 ID를 하나 이상 입력해주세요."));
+                bool useSubIds = req.SubIds != null && req.SubIds.Count > 0;
 
-                // ObjectId 변환 (유효하지 않은 ID 사전 필터링)
-                var objectIds = new List<ObjectId>();
-                var invalidIds = new List<string>();
-
-                foreach (var id in req.Ids)
+                if (!useSubIds && (req.Ids == null || req.Ids.Count == 0))
                 {
-                    if (ObjectId.TryParse(id, out var objectId))
-                        objectIds.Add(objectId);
-                    else
-                        invalidIds.Add(id);
+                    return BadRequest(
+                        ResponseDTO<object>.ErrorResponse(
+                            "400",
+                            "삭제할 ID 또는 SubId를 하나 이상 입력해주세요."));
                 }
-
-                if (invalidIds.Count > 0)
-                    return BadRequest(ResponseDTO<object>.ErrorResponse("400",
-                        $"유효하지 않은 ID 형식이 포함되어 있습니다: [{string.Join(", ", invalidIds)}]"));
 
                 // ImageType에 따라 컬렉션 분기
                 var collection = req.ImageType == ImageType.Target
                     ? _mongo.TargetVectors
                     : _mongo.FaceVectors;
 
-                // 해당 컬렉션에서 요청된 id 목록 조회
-                var vectorFilter = Builders<FaceVector>.Filter.In(x => x.Id, objectIds);
+                FilterDefinition<FaceVector> vectorFilter;
+
+                List<string> invalidIds = [];
+
+                // SubIds 기준 삭제
+                if (useSubIds)
+                {
+                    vectorFilter = Builders<FaceVector>.Filter.In(
+                        x => x.SubId,
+                        req.SubIds);
+                }
+                // ObjectId 기준 삭제
+                else
+                {
+                    var objectIds = new List<ObjectId>();
+
+                    foreach (var id in req.Ids)
+                    {
+                        if (ObjectId.TryParse(id, out var objectId))
+                            objectIds.Add(objectId);
+                        else
+                            invalidIds.Add(id);
+                    }
+
+                    if (invalidIds.Count > 0)
+                    {
+                        return BadRequest(
+                            ResponseDTO<object>.ErrorResponse(
+                                "400",
+                                $"유효하지 않은 ID 형식이 포함되어 있습니다: [{string.Join(", ", invalidIds)}]"));
+                    }
+
+                    vectorFilter = Builders<FaceVector>.Filter.In(
+                        x => x.Id,
+                        objectIds);
+                }
+
                 var foundVectors = await collection.Find(vectorFilter).ToListAsync();
 
                 if (foundVectors.Count == 0)
@@ -377,19 +404,57 @@ namespace FaceMatchAPI.Controllers
                 // FaceVectors(or TargetVectors) 삭제
                 var vectorDeleteResult = await collection.DeleteManyAsync(vectorFilter);
 
-                // FaceImages 삭제
-                var imageFilter = Builders<FaceImage>.Filter.In(x => x.Id, imageObjectIds);
-                var imageDeleteResult = await _mongo.FaceImages.DeleteManyAsync(imageFilter);
+                // Image 삭제
+                long imageDeletedCount = 0;
 
-                // 요청한 ID 중 DB에 없었던 ID 계산
-                var foundIds = foundVectors.Select(x => x.Id.ToString()).ToHashSet();
-                var notFoundIds = req.Ids.Where(id => !foundIds.Contains(id)).ToList();
+                if (imageObjectIds.Count > 0)
+                {
+                    var imageFilter = Builders<FaceImage>.Filter.In(
+                        x => x.Id,
+                        imageObjectIds);
+
+                    var imageDeleteResult =
+                        await _mongo.FaceImages.DeleteManyAsync(imageFilter);
+
+                    imageDeletedCount = imageDeleteResult.DeletedCount;
+                }
+
+                // 찾지 못한 항목 계산
+                List<string> notFoundIds = [];
+
+                if (useSubIds)
+                {
+                    var foundSubIds = foundVectors
+                        .Select(x => x.SubId)
+                        .Where(x => !string.IsNullOrEmpty(x))
+                        .ToHashSet();
+
+                    notFoundIds = req.SubIds
+                        .Where(x => !foundSubIds.Contains(x))
+                        .ToList();
+                }
+                else
+                {
+                    var foundIds = foundVectors
+                        .Select(x => x.Id.ToString())
+                        .ToHashSet();
+
+                    notFoundIds = req.Ids
+                        .Where(x => !foundIds.Contains(x))
+                        .ToList();
+                }
 
                 var data = new
                 {
-                    requestedCount = req.Ids.Count,
+                    requestedCount = useSubIds
+                        ? req.SubIds.Count
+                        : req.Ids.Count,
+
                     deletedCount = (int)vectorDeleteResult.DeletedCount,
-                    notFoundIds = notFoundIds  // 요청했지만 DB에 없었던 ID 목록
+
+                    imageDeletedCount,
+
+                    notFoundIds
                 };
 
                 return Ok(ResponseDTO<object>.SuccessResponse(data, "삭제가 완료되었습니다."));
