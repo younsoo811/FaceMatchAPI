@@ -106,6 +106,7 @@ namespace FaceMatchAPI.Controllers
                     {
                         Id = x.Id.ToString(),
                         x.ImageId,
+                        x.SubId,
                         Score = CosineSimilarity(queryVector, x.Vector)
                     })
                     .Where(x => x.Score >= req.MinScore)
@@ -147,6 +148,7 @@ namespace FaceMatchAPI.Controllers
                     {
                         Id = x.Id.ToString(),
                         x.ImageId,
+                        x.SubId,
                         Score = CosineSimilarity(queryVector, x.Vector)
                     })
                     .Where(x => x.Score >= req.MinScore)

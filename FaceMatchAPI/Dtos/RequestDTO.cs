@@ -11,6 +11,7 @@
         public ImageType ImageType { get; set; } = ImageType.Normal;
         public string Base64 { get; set; } = string.Empty;
         public bool ImageSave { get; set; } = true;
+        public string SubId { get; set; } = string.Empty;
     }
 
     public class SearchRequest

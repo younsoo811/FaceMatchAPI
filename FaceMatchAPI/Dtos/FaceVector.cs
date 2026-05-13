@@ -12,6 +12,8 @@ namespace FaceMatchAPI.Dtos
 
         public string ImageId { get; set; } = string.Empty;
 
+        public string SubId { get; set; } = string.Empty;
+
         public float[] Vector { get; set; } = Array.Empty<float>();
     }
 }
