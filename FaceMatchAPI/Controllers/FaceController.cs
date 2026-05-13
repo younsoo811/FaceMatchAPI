@@ -52,6 +52,7 @@ namespace FaceMatchAPI.Controllers
                 {
                     CreatedAt = DateTime.UtcNow,
                     ImageId = imageId,
+                    SubId = req.SubId,
                     Vector = vector
                 };
 
