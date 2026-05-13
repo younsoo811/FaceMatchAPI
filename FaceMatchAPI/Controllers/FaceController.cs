@@ -21,7 +21,7 @@ namespace FaceMatchAPI.Controllers
             _face = face;
         }
 
-        // 1️. 이미지 저장 + 벡터 저장
+        // 1️. 이미지 저장(선택) + 벡터 저장
         [HttpPost("upload")]
         public async Task<IActionResult> Upload([FromBody] UploadRequest req)
         {
@@ -31,21 +31,27 @@ namespace FaceMatchAPI.Controllers
                 if (!isValid)
                     return BadRequest(ResponseDTO<object>.ErrorResponse("400", errorMsg!));
 
-                var image = new FaceImage
+                string? imageId = string.Empty;
+
+                if (req.ImageSave)
                 {
-                    CreatedAt = DateTime.UtcNow,
-                    Base64 = req.Base64
-                };
+                    var image = new FaceImage
+                    {
+                        CreatedAt = DateTime.UtcNow,
+                        Base64 = req.Base64
+                    };
 
-                await _mongo.FaceImages.InsertOneAsync(image);
+                    await _mongo.FaceImages.InsertOneAsync(image);
 
-                //var vector = _face.ExtractFeature(req.Base64);
+                    imageId = image.Id.ToString();
+                }
+
                 var vector = _face.ExtractFeatureWithFlip(req.Base64);
 
                 var faceVector = new FaceVector
                 {
                     CreatedAt = DateTime.UtcNow,
-                    ImageId = image.Id.ToString(),
+                    ImageId = imageId,
                     Vector = vector
                 };
 
@@ -54,7 +60,13 @@ namespace FaceMatchAPI.Controllers
                 else
                     await _mongo.FaceVectors.InsertOneAsync(faceVector);
 
-                var data = new { vectorId = faceVector.Id.ToString(), imageId = image.Id.ToString(), imageType = req.ImageType.ToString() };
+                var data = new
+                {
+                    vectorId = faceVector.Id.ToString(),
+                    imageId = imageId,
+                    imageType = req.ImageType.ToString()
+                };
+
                 return Ok(ResponseDTO<object>.SuccessResponse(data));
             }
             catch (Exception ex)
@@ -92,7 +104,48 @@ namespace FaceMatchAPI.Controllers
                 var result = list
                     .Select(x => new
                     {
-                        x.Id,
+                        Id = x.Id.ToString(),
+                        x.ImageId,
+                        Score = CosineSimilarity(queryVector, x.Vector)
+                    })
+                    .Where(x => x.Score >= req.MinScore)
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                return Ok(ResponseDTO<object>.SuccessResponse(result));
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", ex.Message));
+            }
+        }
+
+        [HttpPost("search/byVectorIds")]
+        public async Task<IActionResult> SearchByVectorIds([FromBody] SearchByVectorIdsRequest req)
+        {
+            try
+            {
+                var (isValid, format, errorMsg) = Base64ImageValidator.Validate(req.Base64);
+                if (!isValid)
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", errorMsg!));
+
+                var queryVector = _face.ExtractFeatureWithFlip(req.Base64);
+
+                var filter = Builders<FaceVector>.Filter.Empty;
+
+                if(req.VectorIds.Count > 0)
+                    filter &= Builders<FaceVector>.Filter.In(x => x.Id, req.VectorIds.Select(id => ObjectId.Parse(id)));
+
+                var collection = req.SearchType == ImageType.Target
+                    ? _mongo.TargetVectors
+                    : _mongo.FaceVectors;
+
+                var list = await collection.Find(filter).ToListAsync();
+
+                var result = list
+                    .Select(x => new
+                    {
+                        Id = x.Id.ToString(),
                         x.ImageId,
                         Score = CosineSimilarity(queryVector, x.Vector)
                     })

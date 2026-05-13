@@ -10,6 +10,7 @@
     {
         public ImageType ImageType { get; set; } = ImageType.Normal;
         public string Base64 { get; set; } = string.Empty;
+        public bool ImageSave { get; set; } = true;
     }
 
     public class SearchRequest
@@ -18,6 +19,14 @@
         public string Base64 { get; set; } = string.Empty;
         public DateTime? StartDate { get; set; }
         public DateTime? EndDate { get; set; }
+        public float MinScore { get; set; } = 0.5f;
+    }
+
+    public class SearchByVectorIdsRequest
+    {
+        public ImageType SearchType { get; set; } = ImageType.Normal;
+        public string Base64 { get; set; } = string.Empty;
+        public List<string> VectorIds { get; set; } = [];
         public float MinScore { get; set; } = 0.5f;
     }
 
