@@ -135,8 +135,27 @@ namespace FaceMatchAPI.Controllers
 
                 var filter = Builders<FaceVector>.Filter.Empty;
 
-                if(req.VectorIds.Count > 0)
-                    filter &= Builders<FaceVector>.Filter.In(x => x.Id, req.VectorIds.Select(id => ObjectId.Parse(id)));
+                if (req.VectorIds.Count > 0)
+                {
+                    var objectIds = req.VectorIds
+                        .Where(id => !string.IsNullOrWhiteSpace(id))
+                        .Where(id => ObjectId.TryParse(id, out _))
+                        .Select(ObjectId.Parse)
+                        .Distinct()
+                        .ToList();
+
+                    if (objectIds.Count == 0)
+                    {
+                        return BadRequest(
+                            ResponseDTO<object>.ErrorResponse(
+                                "400",
+                                "유효한 VectorIds가 없습니다."));
+                    }
+
+                    filter &= Builders<FaceVector>.Filter.In(
+                        x => x.Id,
+                        objectIds);
+                }
 
                 var collection = req.SearchType == ImageType.Target
                     ? _mongo.TargetVectors
@@ -403,7 +422,10 @@ namespace FaceMatchAPI.Controllers
 
                 // 찾은 벡터들의 ImageId 수집
                 var imageObjectIds = foundVectors
+                    .Where(x => !string.IsNullOrWhiteSpace(x.ImageId))
+                    .Where(x => ObjectId.TryParse(x.ImageId, out _))
                     .Select(x => ObjectId.Parse(x.ImageId))
+                    .Distinct()
                     .ToList();
 
                 // FaceVectors(or TargetVectors) 삭제
