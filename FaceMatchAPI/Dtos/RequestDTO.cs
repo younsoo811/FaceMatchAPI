@@ -47,6 +47,8 @@
         public ImageType ImageType { get; set; } = ImageType.Normal;
         public DateTime? StartDate { get; set; }
         public DateTime? EndDate { get; set; }
+        public string VectorId { get; set; } = string.Empty;
+        public string SubId { get; set; } = string.Empty;
         public int Page { get; set; } = 1;       // 1부터 시작
         public int PageSize { get; set; } = 20;  // 기본 20개
     }

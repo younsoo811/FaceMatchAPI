@@ -287,6 +287,10 @@ namespace FaceMatchAPI.Controllers
                     filter &= Builders<FaceVector>.Filter.Gte(x => x.CreatedAt, req.StartDate.Value);
                 if (req.EndDate.HasValue)
                     filter &= Builders<FaceVector>.Filter.Lte(x => x.CreatedAt, req.EndDate.Value);
+                if(!string.IsNullOrEmpty(req.VectorId))
+                    filter &= Builders<FaceVector>.Filter.Eq(x => x.Id, ObjectId.Parse(req.VectorId));
+                if(!string.IsNullOrEmpty(req.SubId))
+                    filter &= Builders<FaceVector>.Filter.Eq(x => x.SubId, req.SubId);
 
                 // 전체 건수와 페이지 데이터를 병렬로 조회
                 var totalCountTask = collection.CountDocumentsAsync(filter);
