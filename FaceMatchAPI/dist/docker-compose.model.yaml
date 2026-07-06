@@ -9,6 +9,7 @@
     environment:
       - MONGODB_CONNECTION_STR=mongodb://seo_ai:qrqvud3@idap-mongo-db:27017
       - ASPNETCORE_URLS=http://0.0.0.0:18885
+      - FacePool__Size=4
     networks:
       - idap_group
 

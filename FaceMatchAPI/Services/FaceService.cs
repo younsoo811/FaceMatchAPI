@@ -5,42 +5,40 @@ using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenCvSharp;
 using OpenCvSharp.Dnn;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Drawing = System.Drawing;
 
 namespace FaceMatchAPI.Services
 {
-    public class FaceService
+    // ================================================================
+    //  FaceProcessor - 얼굴 처리 파이프라인 인스턴스 1개
+    //  Pool에 N개가 존재하며, 각 인스턴스는 단일 스레드에서만 사용됩니다.
+    //  (스레드 안전 문제 없음)
+    // ================================================================
+    public class FaceProcessor
     {
-        private readonly ILogger<FaceService> _logger;
-        private FaceDetector _detector;
-        private FaceAligner _aligner;
-        private FaceModel _model;
+        private readonly FaceDetector _detector;
+        private readonly FaceAligner _aligner;
+        private readonly FaceModel _model;
 
-        public FaceService(IWebHostEnvironment env, ILogger<FaceService> logger)
+        public FaceProcessor(string baseDir, ILogger logger)
         {
-            _logger = logger;
-
-            string baseDir = Path.Combine(env.ContentRootPath, "Models");
-
             _detector = new FaceDetector(
                 Path.Combine(baseDir, "deploy.prototxt"),
                 Path.Combine(baseDir, "res10_300x300_ssd_iter_140000.caffemodel"),
-                logger
-            );
+                logger);
 
             _aligner = new FaceAligner(
                 Path.Combine(baseDir, "shape_predictor_68_face_landmarks.dat"),
-                logger
-            );
+                logger);
 
             _model = new FaceModel(
                 Path.Combine(baseDir, "model.onnx"),
-                logger
-            );
+                logger);
         }
 
-        public float[] ExtractFeatureWithFlip(string base64)
+        public float[] ExtractFeatureWithFlip(string base64, ILogger logger)
         {
             Mat? mat = null;
             Mat? face = null;
@@ -49,93 +47,44 @@ namespace FaceMatchAPI.Services
 
             try
             {
-                // ── 1. Base64 → Mat 변환 ──
-                try
-                {
-                    mat = Base64ToMat(base64);
-                }
-                catch (Exception ex)
-                {
-                    throw new FaceProcessingException("Decode", "Base64 이미지 디코딩 실패", ex);
-                }
+                try { mat = Base64ToMat(base64); }
+                catch (Exception ex) { throw new FaceProcessingException("Decode", "Base64 이미지 디코딩 실패", ex); }
 
-                // ── 2. 얼굴 검출 ──
                 try
                 {
-                    _logger.LogDebug("[FaceService] 얼굴 검출 시작");
+                    logger.LogDebug("[FaceProcessor] 얼굴 검출 시작");
                     face = _detector.Detect(mat);
-                    _logger.LogDebug("[FaceService] 얼굴 검출 완료 ({W}x{H})", face.Width, face.Height);
                 }
                 catch (FaceProcessingException) { throw; }
-                catch (Exception ex)
-                {
-                    throw new FaceProcessingException("Detection", "얼굴 검출 중 오류 발생", ex);
-                }
+                catch (Exception ex) { throw new FaceProcessingException("Detection", "얼굴 검출 중 오류 발생", ex); }
 
-                // ── 3. 얼굴 정렬 ──
                 try
                 {
-                    _logger.LogDebug("[FaceService] 얼굴 정렬 시작");
+                    logger.LogDebug("[FaceProcessor] 얼굴 정렬 시작");
                     aligned = _aligner.Align(face);
-                    _logger.LogDebug("[FaceService] 얼굴 정렬 완료");
                 }
                 catch (FaceProcessingException) { throw; }
-                catch (Exception ex)
-                {
-                    throw new FaceProcessingException("Alignment", "얼굴 정렬 중 오류 발생", ex);
-                }
+                catch (Exception ex) { throw new FaceProcessingException("Alignment", "얼굴 정렬 중 오류 발생", ex); }
 
-                // ── 4. 특징 벡터 추출 (원본) ──
                 float[] f1;
-                try
-                {
-                    _logger.LogDebug("[FaceService] 원본 특징 추출 시작");
-                    f1 = _model.GetFeature(aligned);
-                }
+                try { f1 = _model.GetFeature(aligned); }
                 catch (FaceProcessingException) { throw; }
-                catch (Exception ex)
-                {
-                    throw new FaceProcessingException("FeatureExtraction", "원본 이미지 특징 추출 중 오류 발생", ex);
-                }
+                catch (Exception ex) { throw new FaceProcessingException("FeatureExtraction", "원본 특징 추출 중 오류 발생", ex); }
 
-                // ── 5. 좌우 반전 후 특징 벡터 추출 ──
                 float[] f2;
                 try
                 {
-                    _logger.LogDebug("[FaceService] 반전 이미지 특징 추출 시작");
                     flipped = new Mat();
                     Cv2.Flip(aligned, flipped, FlipMode.Y);
                     f2 = _model.GetFeature(flipped);
                 }
                 catch (FaceProcessingException) { throw; }
-                catch (Exception ex)
-                {
-                    throw new FaceProcessingException("FeatureExtraction", "반전 이미지 특징 추출 중 오류 발생", ex);
-                }
+                catch (Exception ex) { throw new FaceProcessingException("FeatureExtraction", "반전 이미지 특징 추출 중 오류 발생", ex); }
 
-                var result = _model.Average(f1, f2);
-                _logger.LogDebug("[FaceService] 특징 벡터 추출 완료 (dim={Dim})", result.Length);
-                return result;
-            }
-            catch (FaceProcessingException fpEx)
-            {
-                // 얼굴 처리 중 발생한 예상 가능한 오류
-                _logger.LogWarning(fpEx,
-                    "[FaceService] 얼굴 처리 실패 | Stage={Stage} | {Message}",
-                    fpEx.Stage, fpEx.Message);
-                throw;
-            }
-            catch (Exception ex)
-            {
-                // 예상치 못한 오류
-                _logger.LogError(ex,
-                    "[FaceService] 예상치 못한 오류 발생 | {ExType}: {Message}",
-                    ex.GetType().Name, ex.Message);
-                throw;
+                return _model.Average(f1, f2);
             }
             finally
             {
-                // Native 리소스 해제 (Mat은 GC에만 맡기면 안 됨)
                 mat?.Dispose();
                 face?.Dispose();
                 aligned?.Dispose();
@@ -143,21 +92,100 @@ namespace FaceMatchAPI.Services
             }
         }
 
-        // ===== Utils =====
-
-        private Mat Base64ToMat(string base64)
+        private static Mat Base64ToMat(string base64)
         {
             if (base64.Contains(",")) base64 = base64.Split(',')[1];
             var bytes = Convert.FromBase64String(base64);
-
             var mat = Cv2.ImDecode(bytes, ImreadModes.Color);
-
             if (mat == null || mat.Empty())
-                throw new FaceProcessingException("Decode", "이미지 디코딩 결과가 비어 있습니다. 손상된 이미지일 수 있습니다.");
-
+                throw new FaceProcessingException("Decode", "이미지 디코딩 결과가 비어 있습니다.");
             return mat;
         }
     }
+
+    // ================================================================
+    //  FaceService - FaceProcessor Object Pool 래퍼
+    //  서버 시작 시 PoolSize개의 FaceProcessor를 미리 생성해둡니다.
+    //  요청이 오면 가용 인스턴스를 빌려 처리하고 반환합니다.
+    //  Pool이 모두 사용 중이면 가용 인스턴스가 생길 때까지 대기합니다.
+    // ================================================================
+    public class FaceService : IDisposable
+    {
+        private readonly ILogger<FaceService> _logger;
+        private readonly ConcurrentBag<FaceProcessor> _pool;
+        private readonly SemaphoreSlim _semaphore;
+        private readonly int _poolSize;
+
+        public FaceService(IWebHostEnvironment env, ILogger<FaceService> logger, IConfiguration config)
+        {
+            _logger = logger;
+
+            // appsettings.json의 "FacePool:Size" 값 사용, 없으면 CPU 코어 수 기준
+            _poolSize = config.GetValue<int>("FacePool:Size");
+            if (_poolSize <= 0)
+                _poolSize = Math.Max(2, Environment.ProcessorCount);
+
+            _pool = new ConcurrentBag<FaceProcessor>();
+            _semaphore = new SemaphoreSlim(_poolSize, _poolSize);
+
+            string baseDir = Path.Combine(env.ContentRootPath, "Models");
+
+            _logger.LogInformation("[FaceService] FaceProcessor Pool 초기화 시작 (PoolSize={Size})", _poolSize);
+
+            // 서버 시작 시 PoolSize개 인스턴스를 미리 생성 (모델 로딩)
+            for (int i = 0; i < _poolSize; i++)
+            {
+                _pool.Add(new FaceProcessor(baseDir, logger));
+                _logger.LogInformation("[FaceService] FaceProcessor [{Idx}/{Total}] 생성 완료", i + 1, _poolSize);
+            }
+
+            _logger.LogInformation("[FaceService] Pool 초기화 완료. 최대 {Size}개 요청 병렬 처리 가능.", _poolSize);
+        }
+
+        public async Task<float[]> ExtractFeatureWithFlipAsync(string base64, CancellationToken ct = default)
+        {
+            // Pool에 가용 슬롯이 생길 때까지 대기
+            await _semaphore.WaitAsync(ct);
+
+            if (!_pool.TryTake(out var processor))
+            {
+                // 안전망: 세마포어 슬롯은 있는데 bag이 비어 있는 예외 상황
+                _logger.LogError("[FaceService] Pool에서 인스턴스를 가져오지 못했습니다.");
+                _semaphore.Release();
+                throw new InvalidOperationException("FaceProcessor Pool 오류: 가용 인스턴스 없음");
+            }
+
+            try
+            {
+                _logger.LogDebug("[FaceService] FaceProcessor 대여 (pool 잔여={Remaining})", _semaphore.CurrentCount);
+                return processor.ExtractFeatureWithFlip(base64, _logger);
+            }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx, "[FaceService] 얼굴 처리 실패 | Stage={Stage}", fpEx.Stage);
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[FaceService] 예상치 못한 오류 | {ExType}: {Message}",
+                    ex.GetType().Name, ex.Message);
+                throw;
+            }
+            finally
+            {
+                // 성공/실패 관계없이 반드시 반환
+                _pool.Add(processor);
+                _semaphore.Release();
+                _logger.LogDebug("[FaceService] FaceProcessor 반환 (pool 잔여={Remaining})", _semaphore.CurrentCount);
+            }
+        }
+
+        public void Dispose()
+        {
+            _semaphore.Dispose();
+        }
+    }
+
 
     // ================= 얼굴 검출 =================
     class FaceDetector
