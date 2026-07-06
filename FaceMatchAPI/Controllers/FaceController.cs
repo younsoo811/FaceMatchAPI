@@ -1,10 +1,10 @@
 ﻿using FaceMatchAPI.Dtos;
+using FaceMatchAPI.Exceptions;
 using FaceMatchAPI.Services;
 using FaceMatchAPI.Utils;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using System.Buffers.Text;
 
 namespace FaceMatchAPI.Controllers
 {
@@ -14,11 +14,13 @@ namespace FaceMatchAPI.Controllers
     {
         private readonly MongoService _mongo;
         private readonly FaceService _face;
+        private readonly ILogger<FaceController> _logger;
 
-        public FaceController(MongoService mongo, FaceService face)
+        public FaceController(MongoService mongo, FaceService face, ILogger<FaceController> logger)
         {
             _mongo = mongo;
             _face = face;
+            _logger = logger;
         }
 
         // 1️. 이미지 저장(선택) + 벡터 저장
@@ -42,7 +44,6 @@ namespace FaceMatchAPI.Controllers
                     };
 
                     await _mongo.FaceImages.InsertOneAsync(image);
-
                     imageId = image.Id.ToString();
                 }
 
@@ -70,9 +71,21 @@ namespace FaceMatchAPI.Controllers
 
                 return Ok(ResponseDTO<object>.SuccessResponse(data));
             }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx,
+                    "[Upload] 얼굴 처리 실패 | Stage={Stage} | SubId={SubId}",
+                    fpEx.Stage, req.SubId);
+                return StatusCode(422,
+                    ResponseDTO<object>.ErrorResponse("422",
+                        $"얼굴 처리 실패 [{fpEx.Stage}]: {fpEx.Message}"));
+            }
             catch (Exception ex)
             {
-                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", ex.Message));
+                _logger.LogError(ex,
+                    "[Upload] 처리 중 오류 발생 | SubId={SubId} | {ExType}: {Message}",
+                    req.SubId, ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
             }
         }
 
@@ -116,9 +129,21 @@ namespace FaceMatchAPI.Controllers
 
                 return Ok(ResponseDTO<object>.SuccessResponse(result));
             }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx,
+                    "[Search] 얼굴 처리 실패 | Stage={Stage}",
+                    fpEx.Stage);
+                return StatusCode(422,
+                    ResponseDTO<object>.ErrorResponse("422",
+                        $"얼굴 처리 실패 [{fpEx.Stage}]: {fpEx.Message}"));
+            }
             catch (Exception ex)
             {
-                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", ex.Message));
+                _logger.LogError(ex,
+                    "[Search] 처리 중 오류 발생 | {ExType}: {Message}",
+                    ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
             }
         }
 
@@ -147,14 +172,10 @@ namespace FaceMatchAPI.Controllers
                     if (objectIds.Count == 0)
                     {
                         return BadRequest(
-                            ResponseDTO<object>.ErrorResponse(
-                                "400",
-                                "유효한 VectorIds가 없습니다."));
+                            ResponseDTO<object>.ErrorResponse("400", "유효한 VectorIds가 없습니다."));
                     }
 
-                    filter &= Builders<FaceVector>.Filter.In(
-                        x => x.Id,
-                        objectIds);
+                    filter &= Builders<FaceVector>.Filter.In(x => x.Id, objectIds);
                 }
 
                 var collection = req.SearchType == ImageType.Target
@@ -177,12 +198,25 @@ namespace FaceMatchAPI.Controllers
 
                 return Ok(ResponseDTO<object>.SuccessResponse(result));
             }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx,
+                    "[SearchByVectorIds] 얼굴 처리 실패 | Stage={Stage}",
+                    fpEx.Stage);
+                return StatusCode(422,
+                    ResponseDTO<object>.ErrorResponse("422",
+                        $"얼굴 처리 실패 [{fpEx.Stage}]: {fpEx.Message}"));
+            }
             catch (Exception ex)
             {
-                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", ex.Message));
+                _logger.LogError(ex,
+                    "[SearchByVectorIds] 처리 중 오류 발생 | {ExType}: {Message}",
+                    ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
             }
         }
 
+        // (GetImages, GetVectors, Delete 엔드포인트는 아래와 동일한 패턴으로 catch만 수정)
         [HttpPost("images")]
         public async Task<IActionResult> GetImages([FromBody] GetImageRequest req)
         {
@@ -307,9 +341,9 @@ namespace FaceMatchAPI.Controllers
                     filter &= Builders<FaceVector>.Filter.Gte(x => x.CreatedAt, req.StartDate.Value);
                 if (req.EndDate.HasValue)
                     filter &= Builders<FaceVector>.Filter.Lte(x => x.CreatedAt, req.EndDate.Value);
-                if(!string.IsNullOrEmpty(req.VectorId))
+                if (!string.IsNullOrEmpty(req.VectorId))
                     filter &= Builders<FaceVector>.Filter.Eq(x => x.Id, ObjectId.Parse(req.VectorId));
-                if(!string.IsNullOrEmpty(req.SubId))
+                if (!string.IsNullOrEmpty(req.SubId))
                     filter &= Builders<FaceVector>.Filter.Eq(x => x.SubId, req.SubId);
 
                 // 전체 건수와 페이지 데이터를 병렬로 조회
