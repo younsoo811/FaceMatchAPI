@@ -2,7 +2,7 @@
 
 > **Base URL** `http://localhost:5214/api/face`  
 > **Content-Type** `application/json`  
-> **버전** `v1.2`  
+> **버전** `v1.3`  
 > **최종 수정** 2026-08-31  
 > **기준 코드** `FaceMatchAPI/Controllers/FaceController.cs`, `FaceMatchAPI/Dtos/RequestDTO.cs`
 
@@ -16,14 +16,15 @@
 4. [지정 벡터 대상 유사 얼굴 검색](#4-지정-벡터-대상-유사-얼굴-검색-post-searchbyvectorids)
 5. [그룹 멤버 등록](#5-그룹-멤버-등록-post-groupsaddmembers)
 6. [그룹 대상 유사 얼굴 검색](#6-그룹-대상-유사-얼굴-검색-post-searchbygroup)
-7. [이미지 조회](#7-이미지-조회-post-images)
-8. [벡터 조회](#8-벡터-조회-post-vectors)
-9. [벡터 페이지 조회](#9-벡터-페이지-조회-post-vectorspage)
-10. [데이터 삭제](#10-데이터-삭제-post-delete)
-11. [오류 응답](#11-오류-응답)
-12. [MongoDB 컬렉션 구조](#12-mongodb-컬렉션-구조)
-13. [API 전체 목록](#13-api-전체-목록)
-14. [실행 및 설정 참고](#14-실행-및-설정-참고)
+7. [그룹 삭제](#7-그룹-삭제-post-groupsdelete)
+8. [이미지 조회](#8-이미지-조회-post-images)
+9. [벡터 조회](#9-벡터-조회-post-vectors)
+10. [벡터 페이지 조회](#10-벡터-페이지-조회-post-vectorspage)
+11. [데이터 삭제](#11-데이터-삭제-post-delete)
+12. [오류 응답](#12-오류-응답)
+13. [MongoDB 컬렉션 구조](#13-mongodb-컬렉션-구조)
+14. [API 전체 목록](#14-api-전체-목록)
+15. [실행 및 설정 참고](#15-실행-및-설정-참고)
 
 ---
 
@@ -356,7 +357,52 @@
 
 ---
 
-## 7. 이미지 조회 `POST /images`
+## 7. 그룹 삭제 `POST /groups/delete`
+
+그룹명 접두사와 선택적인 날짜 조건으로 `face_groups` 문서를 삭제합니다. 전체 경로는 `POST /api/face/groups/delete`입니다. 빈 접두사는 허용하지 않으므로 전체 그룹이 실수로 삭제되지 않습니다.
+
+### Request
+
+```json
+{
+  "groupNamePrefix": "MonitoringEntry",
+  "deleteThroughDate": "20260824"
+}
+```
+
+| 필드 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `groupNamePrefix` | `string` | 예 | `""` | 삭제 대상 그룹이 시작해야 하는 접두사. 빈 값은 `400` |
+| `deleteThroughDate` | `string` | 아니오 | `""` | `yyyyMMdd` 형식의 삭제 기준일. 그룹명 마지막 `_` 뒤의 날짜가 해당 날짜 이하일 때 삭제 |
+
+`deleteThroughDate`가 비어 있으면 접두사에 맞는 그룹을 날짜와 관계없이 모두 삭제합니다. 날짜 조건을 사용할 때 `yyyyMMdd` 날짜 접미사가 없는 그룹은 삭제하지 않습니다.
+
+### Response `200 OK`
+
+```json
+{
+  "code": "200",
+  "msg": "OK",
+  "data": {
+    "requestedCount": 3,
+    "deletedCount": 3,
+    "failedGroupNames": []
+  },
+  "success": true
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `data.requestedCount` | `int` | 삭제 조건에 일치한 그룹 개수 |
+| `data.deletedCount` | `int` | 실제 삭제된 그룹 개수 |
+| `data.failedGroupNames` | `string[]` | 삭제하지 못한 그룹명 목록 |
+
+이 API는 그룹 문서만 삭제하며 그룹이 참조하던 `face_vectors` 및 `face_images` 데이터는 삭제하지 않습니다.
+
+---
+
+## 8. 이미지 조회 `POST /images`
 
 `face_images` 컬렉션에서 이미지 ObjectId 목록으로 이미지를 조회합니다.
 
@@ -403,7 +449,7 @@
 
 ---
 
-## 8. 벡터 조회 `POST /vectors`
+## 9. 벡터 조회 `POST /vectors`
 
 `face_vectors` 또는 `target_vectors` 컬렉션에서 벡터 ObjectId 목록으로 벡터를 조회합니다.
 
@@ -451,7 +497,7 @@
 
 ---
 
-## 9. 벡터 페이지 조회 `POST /vectors/page`
+## 10. 벡터 페이지 조회 `POST /vectors/page`
 
 벡터 컬렉션을 페이지 단위로 조회합니다. 결과는 `createdAt` 내림차순입니다.
 
@@ -516,7 +562,7 @@
 
 ---
 
-## 10. 데이터 삭제 `POST /delete`
+## 11. 데이터 삭제 `POST /delete`
 
 벡터와 해당 벡터가 참조하는 이미지를 삭제합니다. 삭제 기준은 `ids` 또는 `subIds`입니다. `face_vectors`를 삭제하면 해당 벡터 ID는 모든 `face_groups.memberIds`에서도 제거됩니다.
 
@@ -582,7 +628,7 @@
 
 ---
 
-## 11. 오류 응답
+## 12. 오류 응답
 
 ### 오류 응답 예시
 
@@ -610,6 +656,8 @@
 | `400` | `"400"` | `startDate > endDate` (`/vectors/page`) |
 | `400` | `"400"` | 그룹 API의 `groupName` 또는 `subId`가 비어 있음 |
 | `400` | `"400"` | `/search/byGroup`의 `maxMembers < 1` |
+| `400` | `"400"` | `/groups/delete`의 `groupNamePrefix`가 비어 있음 |
+| `400` | `"400"` | `/groups/delete`의 `deleteThroughDate`가 `yyyyMMdd` 형식이 아님 |
 | `404` | `"404"` | 이미지, 벡터, 삭제 대상 데이터가 하나도 조회되지 않음 |
 | `422` | `"422"` | 얼굴 처리 파이프라인 실패 |
 | `499` | `"499"` | 클라이언트가 업로드/검색 요청을 취소함 |
@@ -628,7 +676,7 @@
 
 ---
 
-## 12. MongoDB 컬렉션 구조
+## 13. MongoDB 컬렉션 구조
 
 데이터베이스 이름은 `face_db`입니다. MongoDB 연결 문자열은 환경 변수 `MONGODB_CONNECTION_STR`에서 읽습니다.
 
@@ -661,7 +709,7 @@
 
 ---
 
-## 13. API 전체 목록
+## 14. API 전체 목록
 
 | Method | Endpoint | 설명 |
 |---|---|---|
@@ -670,6 +718,7 @@
 | `POST` | `/search/byVectorIds` | 지정 벡터 ID 목록 대상 유사 얼굴 검색 |
 | `POST` | `/groups/addMembers` | 그룹 생성 및 일반 얼굴 벡터 멤버 등록 |
 | `POST` | `/search/byGroup` | 지정 그룹의 일반 얼굴 벡터 대상 유사 얼굴 검색 |
+| `POST` | `/groups/delete` | 접두사와 날짜 조건에 맞는 그룹 삭제 |
 | `POST` | `/images` | 이미지 ObjectId 기반 원본 이미지 조회 |
 | `POST` | `/vectors` | 벡터 ObjectId 기반 벡터 조회 |
 | `POST` | `/vectors/page` | 벡터 페이지 조회 및 `vectorId`/`subId` 필터 조회 |
@@ -677,7 +726,7 @@
 
 ---
 
-## 14. 실행 및 설정 참고
+## 15. 실행 및 설정 참고
 
 | 항목 | 값 |
 |---|---|

@@ -339,6 +339,53 @@ namespace FaceMatchAPI.Controllers
             }
         }
 
+        [HttpPost("groups/delete")]
+        public async Task<IActionResult> DeleteGroups([FromBody] DeleteGroupsRequest req)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(req.GroupNamePrefix))
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", "GroupNamePrefix를 입력해주세요."));
+
+                if (!string.IsNullOrEmpty(req.DeleteThroughDate) &&
+                    !DateTime.TryParseExact(req.DeleteThroughDate, "yyyyMMdd",
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _))
+                {
+                    return BadRequest(ResponseDTO<object>.ErrorResponse(
+                        "400", "DeleteThroughDate는 yyyyMMdd 형식이어야 합니다."));
+                }
+
+                var groups = await _mongo.FaceGroups.Find(Builders<FaceGroup>.Filter.Empty).ToListAsync();
+                var targetNames = groups
+                    .Select(x => x.Name)
+                    .Where(name => IsDeleteTarget(name, req))
+                    .ToList();
+
+                long deletedCount = 0;
+                if (targetNames.Count > 0)
+                {
+                    var deleteResult = await _mongo.FaceGroups.DeleteManyAsync(
+                        Builders<FaceGroup>.Filter.In(x => x.Name, targetNames));
+                    deletedCount = deleteResult.DeletedCount;
+                }
+
+                var data = new
+                {
+                    requestedCount = targetNames.Count,
+                    deletedCount = (int)deletedCount,
+                    failedGroupNames = targetNames.Skip((int)deletedCount).ToList()
+                };
+                return Ok(ResponseDTO<object>.SuccessResponse(data));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[DeleteGroups] 처리 중 오류 | Prefix={Prefix} | {ExType}: {Message}",
+                    req.GroupNamePrefix, ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
+            }
+        }
+
         [HttpPost("images")]
         public async Task<IActionResult> GetImages([FromBody] GetImageRequest req)
         {
@@ -631,6 +678,22 @@ namespace FaceMatchAPI.Controllers
                 normB += b[i] * b[i];
             }
             return dot / (float)(Math.Sqrt(normA) * Math.Sqrt(normB));
+        }
+
+        private static bool IsDeleteTarget(string groupName, DeleteGroupsRequest req)
+        {
+            if (!groupName.StartsWith(req.GroupNamePrefix, StringComparison.Ordinal))
+                return false;
+
+            if (string.IsNullOrEmpty(req.DeleteThroughDate))
+                return true;
+
+            var separatorIndex = groupName.LastIndexOf('_');
+            var groupDate = separatorIndex >= 0 ? groupName[(separatorIndex + 1)..] : string.Empty;
+            return DateTime.TryParseExact(groupDate, "yyyyMMdd",
+                       System.Globalization.CultureInfo.InvariantCulture,
+                       System.Globalization.DateTimeStyles.None, out _) &&
+                   string.CompareOrdinal(groupDate, req.DeleteThroughDate) <= 0;
         }
 
         private (List<ObjectId> Valid, List<string> Invalid) ParseObjectIds(List<string> ids)

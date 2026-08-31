@@ -47,6 +47,12 @@
         public bool ImageSave { get; set; }
     }
 
+    public class DeleteGroupsRequest
+    {
+        public string GroupNamePrefix { get; set; } = string.Empty;
+        public string DeleteThroughDate { get; set; } = string.Empty;
+    }
+
     public class GetImageRequest
     {
         public List<string> Ids { get; set; } = [];
