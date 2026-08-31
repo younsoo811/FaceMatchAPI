@@ -31,6 +31,22 @@
         public float MinScore { get; set; } = 0.5f;
     }
 
+    public class SearchByGroupRequest
+    {
+        public string GroupName { get; set; } = string.Empty;
+        public string Base64 { get; set; } = string.Empty;
+        public float MinScore { get; set; } = 0.5f;
+        public int MaxMembers { get; set; } = 100000;
+    }
+
+    public class AddGroupMemberRequest
+    {
+        public string GroupName { get; set; } = string.Empty;
+        public string SubId { get; set; } = string.Empty;
+        public string Base64 { get; set; } = string.Empty;
+        public bool ImageSave { get; set; }
+    }
+
     public class GetImageRequest
     {
         public List<string> Ids { get; set; } = [];

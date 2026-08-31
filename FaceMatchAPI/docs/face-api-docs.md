@@ -2,8 +2,8 @@
 
 > **Base URL** `http://localhost:5214/api/face`  
 > **Content-Type** `application/json`  
-> **버전** `v1.1`  
-> **최종 수정** 2026-08-03  
+> **버전** `v1.2`  
+> **최종 수정** 2026-08-31  
 > **기준 코드** `FaceMatchAPI/Controllers/FaceController.cs`, `FaceMatchAPI/Dtos/RequestDTO.cs`
 
 ---
@@ -14,13 +14,16 @@
 2. [이미지 업로드 및 벡터 저장](#2-이미지-업로드-및-벡터-저장-post-upload)
 3. [유사 얼굴 검색](#3-유사-얼굴-검색-post-search)
 4. [지정 벡터 대상 유사 얼굴 검색](#4-지정-벡터-대상-유사-얼굴-검색-post-searchbyvectorids)
-5. [이미지 조회](#5-이미지-조회-post-images)
-6. [벡터 조회](#6-벡터-조회-post-vectors)
-7. [벡터 페이지 조회](#7-벡터-페이지-조회-post-vectorspage)
-8. [데이터 삭제](#8-데이터-삭제-post-delete)
-9. [오류 응답](#9-오류-응답)
-10. [MongoDB 컬렉션 구조](#10-mongodb-컬렉션-구조)
-11. [API 전체 목록](#11-api-전체-목록)
+5. [그룹 멤버 등록](#5-그룹-멤버-등록-post-groupsaddmembers)
+6. [그룹 대상 유사 얼굴 검색](#6-그룹-대상-유사-얼굴-검색-post-searchbygroup)
+7. [이미지 조회](#7-이미지-조회-post-images)
+8. [벡터 조회](#8-벡터-조회-post-vectors)
+9. [벡터 페이지 조회](#9-벡터-페이지-조회-post-vectorspage)
+10. [데이터 삭제](#10-데이터-삭제-post-delete)
+11. [오류 응답](#11-오류-응답)
+12. [MongoDB 컬렉션 구조](#12-mongodb-컬렉션-구조)
+13. [API 전체 목록](#13-api-전체-목록)
+14. [실행 및 설정 참고](#14-실행-및-설정-참고)
 
 ---
 
@@ -241,7 +244,119 @@
 
 ---
 
-## 5. 이미지 조회 `POST /images`
+## 5. 그룹 멤버 등록 `POST /groups/addMembers`
+
+일반 얼굴 벡터를 그룹에 등록합니다. 전체 경로는 `POST /api/face/groups/addMembers`입니다.
+
+서버는 먼저 `face_vectors`에서 같은 `subId`를 가진 최신 벡터를 조회합니다. 기존 벡터가 있으면 이를 재사용하며, 없으면 전달된 이미지에서 벡터를 추출해 새로 저장합니다. 그룹이 없으면 자동으로 생성되고, 이미 등록된 벡터는 중복 추가되지 않습니다.
+
+### Request
+
+```json
+{
+  "groupName": "20260831-camera-01",
+  "subId": "person-001",
+  "base64": "/9j/4AAQSkZJRgAB...",
+  "imageSave": false
+}
+```
+
+| 필드 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `groupName` | `string` | 예 | `""` | 등록할 그룹 이름. `face_groups._id`로 사용 |
+| `subId` | `string` | 예 | `""` | 외부 시스템의 얼굴 데이터 식별자 |
+| `base64` | `string` | 조건부 | `""` | 새 벡터 생성에 사용할 이미지. 같은 `subId`의 벡터가 없을 때 필수 |
+| `imageSave` | `boolean` | 아니오 | `false` | 새 벡터 생성 시 원본 이미지를 `face_images`에 저장할지 여부 |
+
+### Response `200 OK`
+
+```json
+{
+  "code": "200",
+  "msg": "OK",
+  "data": {
+    "vectorId": "665f1a2b3c4d5e6f7a8b9c0d",
+    "groupId": "20260831-camera-01"
+  },
+  "success": true
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `data.vectorId` | `string` | 그룹에 등록된 `face_vectors` 문서의 ObjectId |
+| `data.groupId` | `string` | 그룹 ID. 현재 구현에서는 `groupName`과 동일 |
+
+주의:
+
+| 조건 | 동작 |
+|---|---|
+| 그룹이 존재하지 않음 | 새 그룹을 생성한 뒤 멤버 등록 |
+| 같은 그룹에 같은 벡터를 다시 등록 | `AddToSet`으로 중복 없이 기존 멤버 유지 |
+| 같은 `subId`의 벡터가 존재함 | 가장 최근에 생성된 벡터를 재사용하며 `base64`, `imageSave`는 사용하지 않음 |
+| 같은 `subId`의 벡터가 존재하지 않음 | `base64` 검증 및 얼굴 벡터 추출 후 `face_vectors`에 저장 |
+| `groupName` 또는 `subId`가 비어 있음 | `400`, `"GroupName과 SubId를 입력해주세요."` |
+
+---
+
+## 6. 그룹 대상 유사 얼굴 검색 `POST /search/byGroup`
+
+입력 이미지와 지정 그룹에 등록된 일반 얼굴 벡터를 비교합니다. 전체 경로는 `POST /api/face/search/byGroup`입니다.
+
+### Request
+
+```json
+{
+  "groupName": "20260831-camera-01",
+  "base64": "/9j/4AAQSkZJRgAB...",
+  "minScore": 0.8,
+  "maxMembers": 100000
+}
+```
+
+| 필드 | 타입 | 필수 | 기본값 | 설명 |
+|---|---|---|---|---|
+| `groupName` | `string` | 예 | `""` | 검색할 그룹 이름 |
+| `base64` | `string` | 예 | `""` | 검색 기준 얼굴 이미지 |
+| `minScore` | `float` | 아니오 | `0.5` | 반환할 최소 코사인 유사도 |
+| `maxMembers` | `int` | 아니오 | `100000` | 그룹 멤버 목록에서 비교할 최대 인원수. 1 이상 |
+
+### Response `200 OK`
+
+```json
+{
+  "code": "200",
+  "msg": "OK",
+  "data": [
+    {
+      "id": "665f1a2b3c4d5e6f7a8b9c0d",
+      "imageId": "",
+      "subId": "person-001",
+      "score": 0.9345
+    }
+  ],
+  "success": true
+}
+```
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `data[].id` | `string` | 매칭된 `face_vectors` 문서의 ObjectId |
+| `data[].imageId` | `string` | 연결된 이미지 문서의 ObjectId. 이미지 미저장 시 빈 문자열 |
+| `data[].subId` | `string` | 외부 시스템 얼굴 데이터 식별자 |
+| `data[].score` | `float` | 코사인 유사도 |
+
+결과는 `score` 내림차순으로 정렬됩니다. 그룹이 없거나 멤버가 없는 경우와 `minScore` 이상인 결과가 없는 경우 모두 빈 배열을 포함한 `200 OK`를 반환합니다. 그룹 검색은 `face_vectors` 컬렉션만 대상으로 합니다.
+
+| 조건 | 동작 |
+|---|---|
+| `groupName`이 비어 있음 | `400`, `"GroupName을 입력해주세요."` |
+| `maxMembers < 1` | `400`, `"MaxMembers는 1 이상이어야 합니다."` |
+| `base64`가 유효하지 않음 | `400` |
+
+---
+
+## 7. 이미지 조회 `POST /images`
 
 `face_images` 컬렉션에서 이미지 ObjectId 목록으로 이미지를 조회합니다.
 
@@ -288,7 +403,7 @@
 
 ---
 
-## 6. 벡터 조회 `POST /vectors`
+## 8. 벡터 조회 `POST /vectors`
 
 `face_vectors` 또는 `target_vectors` 컬렉션에서 벡터 ObjectId 목록으로 벡터를 조회합니다.
 
@@ -336,7 +451,7 @@
 
 ---
 
-## 7. 벡터 페이지 조회 `POST /vectors/page`
+## 9. 벡터 페이지 조회 `POST /vectors/page`
 
 벡터 컬렉션을 페이지 단위로 조회합니다. 결과는 `createdAt` 내림차순입니다.
 
@@ -401,9 +516,9 @@
 
 ---
 
-## 8. 데이터 삭제 `POST /delete`
+## 10. 데이터 삭제 `POST /delete`
 
-벡터와 해당 벡터가 참조하는 이미지를 삭제합니다. 삭제 기준은 `ids` 또는 `subIds`입니다.
+벡터와 해당 벡터가 참조하는 이미지를 삭제합니다. 삭제 기준은 `ids` 또는 `subIds`입니다. `face_vectors`를 삭제하면 해당 벡터 ID는 모든 `face_groups.memberIds`에서도 제거됩니다.
 
 ### Request: 벡터 ID로 삭제
 
@@ -467,7 +582,7 @@
 
 ---
 
-## 9. 오류 응답
+## 11. 오류 응답
 
 ### 오류 응답 예시
 
@@ -493,6 +608,8 @@
 | `400` | `"400"` | `page < 1` |
 | `400` | `"400"` | `pageSize < 1` 또는 `pageSize > 100` |
 | `400` | `"400"` | `startDate > endDate` (`/vectors/page`) |
+| `400` | `"400"` | 그룹 API의 `groupName` 또는 `subId`가 비어 있음 |
+| `400` | `"400"` | `/search/byGroup`의 `maxMembers < 1` |
 | `404` | `"404"` | 이미지, 벡터, 삭제 대상 데이터가 하나도 조회되지 않음 |
 | `422` | `"422"` | 얼굴 처리 파이프라인 실패 |
 | `499` | `"499"` | 클라이언트가 업로드/검색 요청을 취소함 |
@@ -511,7 +628,7 @@
 
 ---
 
-## 10. MongoDB 컬렉션 구조
+## 12. MongoDB 컬렉션 구조
 
 데이터베이스 이름은 `face_db`입니다. MongoDB 연결 문자열은 환경 변수 `MONGODB_CONNECTION_STR`에서 읽습니다.
 
@@ -533,15 +650,26 @@
 | `subId` | `string` | 외부 시스템 식별자 또는 사용자 정의 보조 ID |
 | `vector` | `float[]` | 얼굴 특징 벡터 |
 
+### `face_groups`
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `_id` | `string` | 그룹 이름이자 그룹 ID |
+| `memberIds` | `ObjectId[]` | 그룹에 속한 `face_vectors._id` 목록 |
+
+그룹 멤버는 `face_vectors`만 참조합니다. 일반 얼굴 벡터가 `/delete`로 삭제되면 해당 벡터 ID도 모든 그룹에서 함께 제거됩니다.
+
 ---
 
-## 11. API 전체 목록
+## 13. API 전체 목록
 
 | Method | Endpoint | 설명 |
 |---|---|---|
 | `POST` | `/upload` | 이미지에서 얼굴 벡터를 추출해 저장 |
 | `POST` | `/search` | 전체 또는 기간 필터 기반 유사 얼굴 검색 |
 | `POST` | `/search/byVectorIds` | 지정 벡터 ID 목록 대상 유사 얼굴 검색 |
+| `POST` | `/groups/addMembers` | 그룹 생성 및 일반 얼굴 벡터 멤버 등록 |
+| `POST` | `/search/byGroup` | 지정 그룹의 일반 얼굴 벡터 대상 유사 얼굴 검색 |
 | `POST` | `/images` | 이미지 ObjectId 기반 원본 이미지 조회 |
 | `POST` | `/vectors` | 벡터 ObjectId 기반 벡터 조회 |
 | `POST` | `/vectors/page` | 벡터 페이지 조회 및 `vectorId`/`subId` 필터 조회 |
@@ -549,7 +677,7 @@
 
 ---
 
-## 12. 실행 및 설정 참고
+## 14. 실행 및 설정 참고
 
 | 항목 | 값 |
 |---|---|

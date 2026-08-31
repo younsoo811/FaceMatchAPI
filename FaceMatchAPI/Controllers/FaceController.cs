@@ -208,6 +208,137 @@ namespace FaceMatchAPI.Controllers
             }
         }
 
+        [HttpPost("search/byGroup")]
+        public async Task<IActionResult> SearchByGroup([FromBody] SearchByGroupRequest req)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(req.GroupName))
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", "GroupName을 입력해주세요."));
+                if (req.MaxMembers < 1)
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", "MaxMembers는 1 이상이어야 합니다."));
+
+                var (isValid, _, errorMsg) = Base64ImageValidator.Validate(req.Base64);
+                if (!isValid)
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", errorMsg!));
+
+                var group = await _mongo.FaceGroups
+                    .Find(x => x.Name == req.GroupName)
+                    .FirstOrDefaultAsync();
+
+                if (group == null || group.MemberIds.Count == 0)
+                    return Ok(ResponseDTO<object>.SuccessResponse(Array.Empty<object>()));
+
+                var memberIds = group.MemberIds.Take(req.MaxMembers);
+                var filter = Builders<FaceVector>.Filter.In(x => x.Id, memberIds);
+                var vectors = await _mongo.FaceVectors.Find(filter).ToListAsync();
+                var queryVector = await _face.ExtractFeatureWithFlipAsync(req.Base64, HttpContext.RequestAborted);
+
+                var result = vectors
+                    .Select(x => new
+                    {
+                        Id = x.Id.ToString(),
+                        x.ImageId,
+                        x.SubId,
+                        Score = CosineSimilarity(queryVector, x.Vector)
+                    })
+                    .Where(x => x.Score >= req.MinScore)
+                    .OrderByDescending(x => x.Score)
+                    .ToList();
+
+                return Ok(ResponseDTO<object>.SuccessResponse(result));
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[SearchByGroup] 클라이언트가 요청을 취소했습니다. GroupName={GroupName}", req.GroupName);
+                return StatusCode(499, ResponseDTO<object>.ErrorResponse("499", "요청이 취소되었습니다."));
+            }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx, "[SearchByGroup] 얼굴 처리 실패 | Stage={Stage} | GroupName={GroupName}",
+                    fpEx.Stage, req.GroupName);
+                return StatusCode(422, ResponseDTO<object>.ErrorResponse("422",
+                    $"얼굴 처리 실패 [{fpEx.Stage}]: {fpEx.Message}"));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[SearchByGroup] 처리 중 오류 | GroupName={GroupName} | {ExType}: {Message}",
+                    req.GroupName, ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
+            }
+        }
+
+        [HttpPost("groups/addMembers")]
+        public async Task<IActionResult> AddGroupMember([FromBody] AddGroupMemberRequest req)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(req.GroupName) || string.IsNullOrWhiteSpace(req.SubId))
+                    return BadRequest(ResponseDTO<object>.ErrorResponse("400", "GroupName과 SubId를 입력해주세요."));
+
+                var faceVector = await _mongo.FaceVectors
+                    .Find(x => x.SubId == req.SubId)
+                    .SortByDescending(x => x.CreatedAt)
+                    .FirstOrDefaultAsync();
+
+                if (faceVector == null)
+                {
+                    var (isValid, _, errorMsg) = Base64ImageValidator.Validate(req.Base64);
+                    if (!isValid)
+                        return BadRequest(ResponseDTO<object>.ErrorResponse("400", errorMsg!));
+
+                    string imageId = string.Empty;
+                    if (req.ImageSave)
+                    {
+                        var image = new FaceImage { CreatedAt = DateTime.UtcNow, Base64 = req.Base64 };
+                        await _mongo.FaceImages.InsertOneAsync(image);
+                        imageId = image.Id.ToString();
+                    }
+
+                    faceVector = new FaceVector
+                    {
+                        CreatedAt = DateTime.UtcNow,
+                        ImageId = imageId,
+                        SubId = req.SubId,
+                        Vector = await _face.ExtractFeatureWithFlipAsync(req.Base64, HttpContext.RequestAborted)
+                    };
+                    await _mongo.FaceVectors.InsertOneAsync(faceVector);
+                }
+
+                var groupFilter = Builders<FaceGroup>.Filter.Eq(x => x.Name, req.GroupName);
+                var groupUpdate = Builders<FaceGroup>.Update.AddToSet(x => x.MemberIds, faceVector.Id);
+                var group = await _mongo.FaceGroups.FindOneAndUpdateAsync(
+                    groupFilter,
+                    groupUpdate,
+                    new FindOneAndUpdateOptions<FaceGroup> { IsUpsert = true, ReturnDocument = ReturnDocument.After });
+
+                var data = new
+                {
+                    vectorId = faceVector.Id.ToString(),
+                    groupId = group.Name
+                };
+                return Ok(ResponseDTO<object>.SuccessResponse(data));
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("[AddGroupMember] 클라이언트가 요청을 취소했습니다. SubId={SubId}", req.SubId);
+                return StatusCode(499, ResponseDTO<object>.ErrorResponse("499", "요청이 취소되었습니다."));
+            }
+            catch (FaceProcessingException fpEx)
+            {
+                _logger.LogWarning(fpEx, "[AddGroupMember] 얼굴 처리 실패 | Stage={Stage} | SubId={SubId}",
+                    fpEx.Stage, req.SubId);
+                return StatusCode(422, ResponseDTO<object>.ErrorResponse("422",
+                    $"얼굴 처리 실패 [{fpEx.Stage}]: {fpEx.Message}"));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[AddGroupMember] 처리 중 오류 | SubId={SubId} | {ExType}: {Message}",
+                    req.SubId, ex.GetType().Name, ex.Message);
+                return StatusCode(500, ResponseDTO<object>.ErrorResponse("500", "서버 내부 오류가 발생했습니다."));
+            }
+        }
+
         [HttpPost("images")]
         public async Task<IActionResult> GetImages([FromBody] GetImageRequest req)
         {
@@ -434,6 +565,14 @@ namespace FaceMatchAPI.Controllers
                     .ToList();
 
                 var vectorDeleteResult = await collection.DeleteManyAsync(vectorFilter);
+
+                if (req.ImageType == ImageType.Normal)
+                {
+                    var deletedVectorIds = foundVectors.Select(x => x.Id);
+                    await _mongo.FaceGroups.UpdateManyAsync(
+                        Builders<FaceGroup>.Filter.AnyIn(x => x.MemberIds, deletedVectorIds),
+                        Builders<FaceGroup>.Update.PullAll(x => x.MemberIds, deletedVectorIds));
+                }
 
                 long imageDeletedCount = 0;
 
